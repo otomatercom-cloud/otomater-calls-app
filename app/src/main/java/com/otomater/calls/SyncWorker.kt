@@ -21,8 +21,10 @@ import java.util.concurrent.TimeUnit
 class SyncWorker(private val ctx: Context, params: WorkerParameters) : Worker(ctx, params) {
 
     override fun doWork(): Result {
-        runSync(ctx)
-        return Result.success()
+        val r = runSyncResult(ctx)
+        // A caught failure (network/permission/server) must trigger WorkManager's own
+        // exponential backoff, not just wait for the next 15-minute periodic tick.
+        return if (r.failed) Result.retry() else Result.success()
     }
 
     companion object {
@@ -55,24 +57,34 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Worker(ct
             }
         }
 
+        /** UI-facing: just the status text (kept for MainActivity's buttons). */
+        fun runSync(c: Context): String = runSyncResult(c).message
+
+        data class SyncOutcome(val message: String, val failed: Boolean)
+
         @Synchronized
-        fun runSync(c: Context): String {
+        fun runSyncResult(c: Context): SyncOutcome {
             val base = Prefs.url(c)
             val key = Prefs.key(c)
-            if (base.isEmpty() || key.isEmpty()) return "Enter the server address and API key first"
+            if (base.isEmpty() || key.isEmpty()) {
+                return SyncOutcome("Enter the server address and API key first", false)
+            }
+            var failed = false
             val msg = try {
                 val sent = sendCalls(c, base, key)
                 val rec = sendRecordings(c, base, key)
                 "$sent call(s) sent, $rec recording(s) uploaded"
             } catch (e: SecurityException) {
+                failed = true
                 "Permission missing: allow Call log and Music/audio access"
             } catch (e: Exception) {
+                failed = true
                 "Will retry: " + (e.message ?: e.javaClass.simpleName)
             }
             val stamp = SimpleDateFormat("dd MMM HH:mm", Locale.getDefault()).format(Date())
             val full = "$stamp - $msg"
             Prefs.setStatus(c, full)
-            return full
+            return SyncOutcome(full, failed)
         }
 
         // ── calls ─────────────────────────────────────────────────────────────
@@ -134,42 +146,67 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Worker(ct
             val keep = JSONArray()
             var done = 0
             val now = System.currentTimeMillis()
+            // Tracks MediaStore row ids already picked for another call IN THIS PASS, so
+            // two calls close together can never both be matched to the same recording file.
+            val claimed = HashSet<Long>()
             for (i in 0 until pending.length()) {
                 val p = pending.getJSONObject(i)
                 val time = p.getLong("time")
-                if (now - time > 24L * 3600 * 1000) continue          // give up after a day
+                if (now - time > 24L * 3600 * 1000) {
+                    // Never disappear silently: tell the server why, so it's visible on the
+                    // lead instead of just vanishing from this local queue with no trace.
+                    try { reportUnavailable(c, base, key, p.getString("id"), "not_found_within_24h") } catch (e: Exception) { /* best effort */ }
+                    continue
+                }
                 if (now - time < 20_000) { keep.put(p); continue }
-                val uri = findRecording(c, time, p.getLong("duration"))
-                if (uri == null) { keep.put(p); continue }
-                val ok = try { upload(c, base, key, p.getString("id"), uri) } catch (e: Exception) { false }
+                val found = findRecording(c, time, p.getLong("duration"), claimed)
+                if (found == null) { keep.put(p); continue }
+                claimed.add(found.second)
+                val ok = try { upload(c, base, key, p.getString("id"), found.first) } catch (e: Exception) { false }
                 if (ok) done++ else keep.put(p)
             }
             Prefs.setPending(c, keep.toString())
             return done
         }
 
-        /** The audio file the phone's own call recorder saved for this call (matched by time and folder/name). */
-        private fun findRecording(c: Context, time: Long, durSec: Long): android.net.Uri? {
+        /** The audio file the phone's own call recorder saved for this call (matched by time and
+         * folder/name), excluding any MediaStore row already claimed by another call this pass.
+         * Returns the content Uri plus the MediaStore row id (so the caller can claim it). */
+        private fun findRecording(c: Context, time: Long, durSec: Long, claimed: Set<Long>): Pair<android.net.Uri, Long>? {
             val from = time / 1000 - 30
             val to = time / 1000 + durSec + 900
             val cols = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.DATE_ADDED,
                 MediaStore.Audio.Media.DISPLAY_NAME, MediaStore.Audio.Media.RELATIVE_PATH)
-            var best: android.net.Uri? = null
+            var bestId: Long? = null
             var bestScore = Long.MAX_VALUE
             c.contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, cols,
                 "${MediaStore.Audio.Media.DATE_ADDED} BETWEEN ? AND ?", arrayOf(from.toString(), to.toString()), null
             )?.use { cur ->
                 while (cur.moveToNext()) {
+                    val id = cur.getLong(0)
+                    if (id in claimed) continue
                     val hint = ((cur.getString(2) ?: "") + " " + (cur.getString(3) ?: "")).lowercase()
                     if (!(hint.contains("call") || hint.contains("record"))) continue
                     val score = Math.abs(cur.getLong(1) - (time / 1000 + durSec))
                     if (score < bestScore) {
                         bestScore = score
-                        best = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, cur.getLong(0))
+                        bestId = id
                     }
                 }
             }
-            return best
+            val id = bestId ?: return null
+            return Pair(ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id), id)
+        }
+
+        /** Tells the backend a recording was never found for this call, with a short reason,
+         * instead of letting it disappear from the local queue with no trace (Gap #1). */
+        private fun reportUnavailable(c: Context, base: String, key: String, id: String, reason: String) {
+            val con = http(base, key, "/otm/mobile/recording_failed")
+            con.requestMethod = "POST"
+            con.doOutput = true
+            con.setRequestProperty("Content-Type", "application/json")
+            con.outputStream.use { it.write(JSONObject().put("id", id).put("reason", reason).toString().toByteArray()) }
+            con.responseCode // drain so the connection completes; errors are caught by the caller
         }
 
         private fun upload(c: Context, base: String, key: String, id: String, uri: android.net.Uri): Boolean {
