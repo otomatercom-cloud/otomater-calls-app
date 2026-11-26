@@ -88,6 +88,19 @@ class MainActivity : Activity() {
         requestPermissions(p.toTypedArray(), 1)
     }
 
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        // Some phones (Xiaomi) keep call recordings in a folder Android's media index never lists;
+        // "All files access" lets the app read that folder directly.
+        if (Build.VERSION.SDK_INT >= 30 && !android.os.Environment.isExternalStorageManager()) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
+            } catch (e: Exception) {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            }
+        }
+    }
+
     private fun saveAndTest() {
         Prefs.savePortal(this, portal.text.toString())
         Prefs.saveLogin(this, url.text.toString(), key.text.toString())

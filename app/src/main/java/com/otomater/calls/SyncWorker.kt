@@ -158,7 +158,8 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Worker(ct
                     while (cur.moveToNext() && names.size < 3) names.add((cur.getString(1) ?: "") + (cur.getString(0) ?: ""))
                 }
             } catch (e: Exception) { }
-            return "\n${pending.length()} recording(s) waiting. Audio near call: " + (if (names.isEmpty()) "none found" else names.joinToString(" | "))
+            val af = if (android.os.Build.VERSION.SDK_INT >= 30 && !android.os.Environment.isExternalStorageManager()) " [All files access OFF - press 1]" else ""
+            return af + "\n${pending.length()} recording(s) waiting. Audio near call: " + (if (names.isEmpty()) "none found" else names.joinToString(" | "))
         }
 
         // ── recordings ────────────────────────────────────────────────────────
@@ -181,6 +182,7 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Worker(ct
                 }
                 if (now - time < 20_000) { keep.put(p); continue }
                 val found = findRecording(c, time, p.getLong("duration"), claimed)
+                    ?: findRecordingFile(time, p.getLong("duration"), claimed)
                 if (found == null) { keep.put(p); continue }
                 claimed.add(found.second)
                 val ok = try { upload(c, base, key, p.getString("id"), found.first) } catch (e: Exception) { false }
@@ -188,6 +190,33 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Worker(ct
             }
             Prefs.setPending(c, keep.toString())
             return done
+        }
+
+        private val RECORDER_DIRS = listOf(
+            "MIUI/sound_recorder/call_rec", "MIUI/sound_recorder", "Recordings/Call", "Recordings/Call recordings",
+            "Sounds/CallRecordings", "Call", "CallRecordings", "Music/Recordings/Call Recordings", "Recordings")
+
+        /** Direct folder read (needs "All files access"): for phones whose recorder files are not in the media index. */
+        private fun findRecordingFile(time: Long, durSec: Long, claimed: Set<Long>): Pair<android.net.Uri, Long>? {
+            val root = android.os.Environment.getExternalStorageDirectory()
+            val endMs = time + durSec * 1000
+            var best: java.io.File? = null
+            var bestScore = Long.MAX_VALUE
+            for (d in RECORDER_DIRS) {
+                val files = java.io.File(root, d).listFiles() ?: continue
+                for (f in files) {
+                    if (!f.isFile || f.length() < 2000) continue
+                    val n = f.name.lowercase()
+                    if (!(n.endsWith(".mp3") || n.endsWith(".m4a") || n.endsWith(".amr") || n.endsWith(".wav") || n.endsWith(".3gp") || n.endsWith(".aac") || n.endsWith(".ogg"))) continue
+                    val m = f.lastModified()
+                    if (m < time - 30_000 || m > endMs + 900_000) continue
+                    if (f.absolutePath.hashCode().toLong() in claimed) continue
+                    val score = Math.abs(m - endMs)
+                    if (score < bestScore) { bestScore = score; best = f }
+                }
+            }
+            val f = best ?: return null
+            return Pair(android.net.Uri.fromFile(f), f.absolutePath.hashCode().toLong())
         }
 
         /** The audio file the phone's own call recorder saved for this call (matched by time and
