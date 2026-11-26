@@ -73,7 +73,7 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Worker(ct
             val msg = try {
                 val sent = sendCalls(c, base, key)
                 val rec = sendRecordings(c, base, key)
-                "$sent call(s) sent, $rec recording(s) uploaded"
+                "$sent call(s) sent, $rec recording(s) uploaded" + waitingInfo(c)
             } catch (e: SecurityException) {
                 failed = true
                 "Permission missing: allow Call log and Music/audio access"
@@ -89,9 +89,9 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Worker(ct
 
         // ── calls ─────────────────────────────────────────────────────────────
         private fun sendCalls(c: Context, base: String, key: String): Int {
-            val since = Prefs.lastDate(c)
+            val since = minOf(Prefs.lastDate(c), System.currentTimeMillis() - 6L * 3600 * 1000)
             val calls = JSONArray()
-            var newest = since
+            var newest = Prefs.lastDate(c)
             val cols = arrayOf(CallLog.Calls._ID, CallLog.Calls.NUMBER, CallLog.Calls.TYPE,
                 CallLog.Calls.DATE, CallLog.Calls.DURATION)
             c.contentResolver.query(CallLog.Calls.CONTENT_URI, cols, "${CallLog.Calls.DATE} > ?",
@@ -126,6 +126,9 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Worker(ct
                 matched++
                 if (r.optBoolean("need_recording")) {
                     val id = r.getString("id")
+                    var dup = false
+                    for (k in 0 until pending.length()) if (pending.getJSONObject(k).getString("id") == id) dup = true
+                    if (dup) continue
                     for (j in 0 until calls.length()) {
                         val cj = calls.getJSONObject(j)
                         if (cj.getString("id") == id) {
@@ -138,6 +141,24 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Worker(ct
             Prefs.setPending(c, pending.toString())
             Prefs.setLastDate(c, newest)
             return matched
+        }
+
+        /** Shows how many recordings are still waiting and what audio files the phone has near the oldest one. */
+        private fun waitingInfo(c: Context): String {
+            val pending = JSONArray(Prefs.pending(c))
+            if (pending.length() == 0) return ""
+            val p = pending.getJSONObject(0)
+            val t = p.getLong("time") / 1000
+            val names = ArrayList<String>()
+            try {
+                c.contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                    arrayOf(MediaStore.Audio.Media.DISPLAY_NAME, MediaStore.Audio.Media.RELATIVE_PATH),
+                    "${MediaStore.Audio.Media.DATE_ADDED} BETWEEN ? AND ?",
+                    arrayOf((t - 60).toString(), (t + p.getLong("duration") + 900).toString()), null)?.use { cur ->
+                    while (cur.moveToNext() && names.size < 3) names.add((cur.getString(1) ?: "") + (cur.getString(0) ?: ""))
+                }
+            } catch (e: Exception) { }
+            return "\n${pending.length()} recording(s) waiting. Audio near call: " + (if (names.isEmpty()) "none found" else names.joinToString(" | "))
         }
 
         // ── recordings ────────────────────────────────────────────────────────
@@ -186,8 +207,10 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Worker(ct
                     val id = cur.getLong(0)
                     if (id in claimed) continue
                     val hint = ((cur.getString(2) ?: "") + " " + (cur.getString(3) ?: "")).lowercase()
-                    if (!(hint.contains("call") || hint.contains("record"))) continue
-                    val score = Math.abs(cur.getLong(1) - (time / 1000 + durSec))
+                    val hinted = hint.contains("call") || hint.contains("record") || hint.contains("sound")
+                    val tight = cur.getLong(1) <= time / 1000 + durSec + 180
+                    if (!hinted && !tight) continue
+                    val score = Math.abs(cur.getLong(1) - (time / 1000 + durSec)) + (if (hinted) 0 else 100000)
                     if (score < bestScore) {
                         bestScore = score
                         bestId = id
