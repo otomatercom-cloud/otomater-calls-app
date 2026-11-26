@@ -69,7 +69,11 @@ class MainActivity : Activity() {
         setContentView(ScrollView(this).apply {
             addView(box, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         })
-        if (Prefs.key(this).isNotEmpty()) SyncWorker.schedulePeriodic(this)
+        if (Prefs.key(this).isNotEmpty()) { SyncWorker.schedulePeriodic(this); startNotices() }
+    }
+
+    private fun startNotices() {
+        try { startForegroundService(Intent(this, NoticeService::class.java)) } catch (_: Exception) { }
     }
 
     override fun onResume() {
@@ -78,7 +82,7 @@ class MainActivity : Activity() {
     }
 
     private fun askPermissions() {
-        val p = mutableListOf(Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_PHONE_STATE)
+        val p = mutableListOf(Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_PHONE_STATE, Manifest.permission.POST_NOTIFICATIONS)
         p += if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO
         else Manifest.permission.READ_EXTERNAL_STORAGE
         requestPermissions(p.toTypedArray(), 1)
@@ -92,7 +96,7 @@ class MainActivity : Activity() {
             val r = SyncWorker.ping(this)
             runOnUiThread {
                 status.text = r
-                if (r.startsWith("Connected")) SyncWorker.schedulePeriodic(this)
+                if (r.startsWith("Connected")) { SyncWorker.schedulePeriodic(this); startNotices() }
             }
         }
     }

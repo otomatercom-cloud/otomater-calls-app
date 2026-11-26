@@ -14,6 +14,9 @@ class CallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val idle = intent.action == Intent.ACTION_BOOT_COMPLETED ||
             intent.getStringExtra(TelephonyManager.EXTRA_STATE) == TelephonyManager.EXTRA_STATE_IDLE
+        if (Prefs.key(context).isNotEmpty() && intent.action == Intent.ACTION_BOOT_COMPLETED) {
+            try { context.startForegroundService(Intent(context, NoticeService::class.java)) } catch (_: Exception) { }
+        }
         if (!idle || Prefs.key(context).isEmpty()) return
         SyncWorker.schedulePeriodic(context)
         val req = OneTimeWorkRequestBuilder<SyncWorker>().setInitialDelay(25, TimeUnit.SECONDS).build()

@@ -23,6 +23,7 @@ class WebActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        try { startForegroundService(Intent(this, NoticeService::class.java)) } catch (_: Exception) { }
         web = WebView(this)
         setContentView(web)
         web.settings.apply {
