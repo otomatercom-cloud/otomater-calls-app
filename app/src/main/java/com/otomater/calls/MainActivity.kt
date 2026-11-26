@@ -46,13 +46,13 @@ class MainActivity : Activity() {
             text = "Calls you make or receive on this phone with a lead's number are added to that lead in Odoo, " +
                 "with the call recording. Calls with other numbers are never sent."
         })
-        box.addView(label("Call Center address (example: https://portal.logiceducation.org)"))
+        box.addView(label("Call Center address (example: https://app.logiceducation.org)"))
         portal = EditText(this).apply { setText(Prefs.portal(this@MainActivity)); inputType = InputType.TYPE_TEXT_VARIATION_URI }
         box.addView(portal)
         box.addView(label("Odoo address (example: https://hrms.logiceducation.org)"))
         url = EditText(this).apply { setText(Prefs.url(this@MainActivity)); inputType = InputType.TYPE_TEXT_VARIATION_URI }
         box.addView(url)
-        box.addView(label("API key (Odoo > My Profile > Account Security > New API Key)"))
+        box.addView(label("Phone App Key (Odoo > Leads Management > Phone App Key > Make my key)"))
         key = EditText(this).apply {
             setText(Prefs.key(this@MainActivity))
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
