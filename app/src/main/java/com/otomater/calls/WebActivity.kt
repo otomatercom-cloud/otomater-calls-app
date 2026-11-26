@@ -61,6 +61,24 @@ class WebActivity : Activity() {
     inner class Bridge {
         @JavascriptInterface fun isApp() = true
 
+        /** Opens the chat in the officer's own WhatsApp (or WhatsApp Business) with the text prefilled. */
+        @JavascriptInterface fun openWhatsApp(number: String, text: String) {
+            var d = number.filter { it.isDigit() }
+            if (d.length == 10) d = "91$d"
+            if (d.length < 7) return
+            val uri = Uri.parse("https://wa.me/$d?text=" + Uri.encode(text))
+            runOnUiThread {
+                for (pkg in listOf("com.whatsapp", "com.whatsapp.w4b", null)) {
+                    try {
+                        val i = Intent(Intent.ACTION_VIEW, uri)
+                        if (pkg != null) i.setPackage(pkg)
+                        startActivity(i)
+                        return@runOnUiThread
+                    } catch (_: Exception) { /* try next */ }
+                }
+            }
+        }
+
         @JavascriptInterface fun openSettings() {
             runOnUiThread { startActivity(Intent(this@WebActivity, MainActivity::class.java).putExtra("settings", true)) }
         }
