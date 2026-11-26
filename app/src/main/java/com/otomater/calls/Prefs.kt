@@ -6,6 +6,8 @@ object Prefs {
     private fun sp(c: Context) = c.getSharedPreferences("otm_calls", Context.MODE_PRIVATE)
 
     fun url(c: Context): String = sp(c).getString("url", "") ?: ""
+    fun portal(c: Context): String = sp(c).getString("portal", "") ?: ""
+    fun savePortal(c: Context, v: String) = sp(c).edit().putString("portal", v.trim().trimEnd('/')).apply()
     fun key(c: Context): String = sp(c).getString("key", "") ?: ""
     fun lastDate(c: Context): Long = sp(c).getLong("last_date", 0L)
     fun status(c: Context): String = sp(c).getString("status", "Not synced yet") ?: ""

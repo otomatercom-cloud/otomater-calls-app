@@ -21,10 +21,15 @@ class MainActivity : Activity() {
 
     private lateinit var url: EditText
     private lateinit var key: EditText
+    private lateinit var portal: EditText
     private lateinit var status: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Already set up -> go straight to the Call Center (set up screen: Settings inside the app)
+        if (Prefs.portal(this).isNotEmpty() && Prefs.key(this).isNotEmpty() && !intent.getBooleanExtra("settings", false)) {
+            startActivity(Intent(this, WebActivity::class.java)); finish(); return
+        }
         val pad = (16 * resources.displayMetrics.density).toInt()
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -41,6 +46,9 @@ class MainActivity : Activity() {
             text = "Calls you make or receive on this phone with a lead's number are added to that lead in Odoo, " +
                 "with the call recording. Calls with other numbers are never sent."
         })
+        box.addView(label("Call Center address (example: https://portal.logiceducation.org)"))
+        portal = EditText(this).apply { setText(Prefs.portal(this@MainActivity)); inputType = InputType.TYPE_TEXT_VARIATION_URI }
+        box.addView(portal)
         box.addView(label("Odoo address (example: https://hrms.logiceducation.org)"))
         url = EditText(this).apply { setText(Prefs.url(this@MainActivity)); inputType = InputType.TYPE_TEXT_VARIATION_URI }
         box.addView(url)
@@ -50,6 +58,7 @@ class MainActivity : Activity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
         box.addView(key)
+        box.addView(button("Open Call Center") { Prefs.savePortal(this, portal.text.toString()); startActivity(Intent(this, WebActivity::class.java)); finish() })
         box.addView(button("1. Allow access (call log, recordings)") { askPermissions() })
         box.addView(button("2. Save and test connection") { saveAndTest() })
         box.addView(button("3. Sync now") { syncNow() })
@@ -76,6 +85,7 @@ class MainActivity : Activity() {
     }
 
     private fun saveAndTest() {
+        Prefs.savePortal(this, portal.text.toString())
         Prefs.saveLogin(this, url.text.toString(), key.text.toString())
         status.text = "Testing..."
         thread {
